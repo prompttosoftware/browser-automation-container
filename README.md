@@ -41,7 +41,7 @@ This system establishes a dedicated Docker container that runs a Node.js applica
    docker-compose up -d
    ```
 
-3. The service will be available at `http://localhost:3000`
+3. The service will be available at `http://localhost:3010`
 
 ## API Reference
 
