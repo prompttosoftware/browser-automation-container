@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+  browser-automation:
+    build: 
+      dockerfile: Dockerfile.browser-automation
+    ports:
+      - "3010:3010"
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - PORT=3010

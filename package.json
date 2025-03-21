@@ -1,0 +1,22 @@
+{
+    "name": "browser-automation-container",
+    "version": "1.0.0",
+    "description": "Headless browser automation with Node.js, Puppeteer, and Express",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "test": "vitest"
+    },
+    "dependencies": {
+        "express": "^4.21.2",
+        "puppeteer": "^24.4.0",
+        "body-parser": "^1.20.3",
+        "cors": "^2.8.5",
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2",
+        "vitest": "^3.0.9"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}
