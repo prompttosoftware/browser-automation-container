@@ -113,7 +113,7 @@ app.post('/actions', async (req, res) => {
               });
               continue;
             }
-            await page.goto(url, { waitUntil: 'networkidle2' });
+            await page.goto(url, { waitUntil: 'domcontentloaded' });
             results.push({ success: true, type, url });
             break;
             
@@ -301,7 +301,7 @@ app.post('/google-search', async (req, res) => {
                 // Navigate to Google with proper error handling
                 console.log('Navigating to DuckDuckGo...');
                 await page.goto('https://www.duckduckgo.com', { 
-                waitUntil: 'networkidle2',
+                waitUntil: 'domcontentloaded',
                 timeout: 30000 
                 });
                 console.log(`Page loaded: ${await page.title()}`);
@@ -331,10 +331,14 @@ app.post('/google-search', async (req, res) => {
                 // Locate and interact with the search box with better error handling
                 console.log('Locating search input...');
                 const searchSelectors = [
+                'input[placeholder*="Search"]',
                 'textarea[title="Search"]',
                 'input[title="Search"]',
                 'input[name="q"]',
-                'textarea[name="q"]'
+                'textarea[name="q"]',
+                'input[id="searchbox_input"',
+                'input[class*="Search"]',
+                'input[aria-label*="Search"]',
                 ];
                 
                 let searchInputFound = false;
@@ -443,7 +447,7 @@ app.post('/google-search', async (req, res) => {
             } catch (error) {
                 console.error(`Duckduckgo search error: ${error.message}`);
                 // Take screenshot on error for debugging
-                await page.screenshot({ path: `error-${Date.now()}.png` });
+                // await page.screenshot({ path: `error-${Date.now()}.png` });
                 result.error = `Search failed: ${error.message}`;
                 result.results = [];
             }
@@ -473,7 +477,7 @@ app.post('/google-search', async (req, res) => {
             } catch (error) {
                 console.error(`More results error: ${error.message}`);
                 // Take screenshot on error for debugging
-                await page.screenshot({ path: `more-results-error-${Date.now()}.png` });
+                // await page.screenshot({ path: `more-results-error-${Date.now()}.png` });
                 result.error = `More results failed: ${error.message}`;
                 result.results = [];
             }
@@ -530,7 +534,7 @@ app.post('/google-search', async (req, res) => {
         } catch (error) {
             console.error(`Next page error: ${error.message}`);
             // Take screenshot on error for debugging
-            await page.screenshot({ path: `next-page-error-${Date.now()}.png` });
+            // await page.screenshot({ path: `next-page-error-${Date.now()}.png` });
             result.error = `Next page failed: ${error.message}`;
             result.results = [];
         }
@@ -586,7 +590,7 @@ app.post('/google-search', async (req, res) => {
         } catch (error) {
             console.error(`Previous page error: ${error.message}`);
             // Take screenshot on error for debugging
-            await page.screenshot({ path: `previous-page-error-${Date.now()}.png` });
+            // await page.screenshot({ path: `previous-page-error-${Date.now()}.png` });
             result.error = `Previous page failed: ${error.message}`;
             result.results = [];
         }
@@ -599,7 +603,7 @@ app.post('/google-search', async (req, res) => {
             }
             
             // Navigate to the result URL
-            await page.goto(resultUrl, { waitUntil: 'networkidle2' });
+            await page.goto(resultUrl, { waitUntil: 'domcontentloaded' });
             
             // Extract page title, URL and content
             result.title = await page.title();
@@ -625,7 +629,7 @@ app.post('/google-search', async (req, res) => {
             } catch (error) {
                 console.error(`Get page error: ${error.message}`);
                 // Take screenshot on error for debugging
-                await page.screenshot({ path: `get-page-error-${Date.now()}.png` });
+                // await page.screenshot({ path: `get-page-error-${Date.now()}.png` });
                 result.error = `Get page failed: ${error.message}`;
                 result.results = [];
             }
