@@ -4,6 +4,10 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { extractDOM } = require('./extractDOM.js');
+const { Readability } = require('@mozilla/readability');
+const jsdom = require('jsdom');
+const { JSDOM } = jsdom;
+const { checkMemory } = require('./memoryMonitor.js');
 
 // Initialize Express app
 const app = express();
@@ -258,6 +262,8 @@ app.post('/actions', async (req, res) => {
   } catch (error) {
     console.error('Execution error:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    checkMemory();
   }
 });
 
@@ -308,24 +314,23 @@ app.post('/google-search', async (req, res) => {
                 
                 // Handle cookie consent dialog with better selector detection
                 try {
-                console.log('Checking for cookie consent dialog...');
-                const cookieSelectors = [
-                    'button[id="L2AGLb"]',          // Standard consent button
-                    'button[aria-label="Accept all"]', // Alternative text-based selector
-                    'form button:nth-child(1)'      // Generic form button as fallback
-                ];
-                
-                for (const selector of cookieSelectors) {
-                    const cookieButton = await page.$(selector);
-                    if (cookieButton) {
-                    console.log(`Cookie dialog found, clicking "${selector}"...`);
-                    await cookieButton.click();
-                    await page.waitForTimeout(1000); // Brief pause after clicking
-                    break;
-                    }
-                }
+                  console.log('Checking for cookie consent dialog...');
+                  const cookieSelectors = [
+                      'button[id="L2AGLb"]',          // Standard consent button
+                      'button[aria-label="Accept all"]', // Alternative text-based selector
+                      'form button:nth-child(1)'      // Generic form button as fallback
+                  ];
+                  
+                  for (const selector of cookieSelectors) {
+                      const cookieButton = await page.$(selector);
+                      if (cookieButton) {
+                        console.log(`Cookie dialog found, clicking "${selector}"...`);
+                        await cookieButton.click();
+                        break;
+                      }
+                  }
                 } catch (e) {
-                console.log('No cookie dialog detected or error handling it:', e.message);
+                  console.log('No cookie dialog detected or error handling it:', e.message);
                 }
                 
                 // Locate and interact with the search box with better error handling
@@ -343,19 +348,22 @@ app.post('/google-search', async (req, res) => {
                 
                 let searchInputFound = false;
                 for (const selector of searchSelectors) {
-                try {
-                    const searchInput = await page.$(selector);
-                    if (searchInput) {
-                    console.log(`Search input found with selector: ${selector}`);
-                    await page.waitForSelector(selector, { visible: true, timeout: 5000 });
-                    await page.click(selector);
-                    await page.type(selector, query, { delay: 50 }); // Slightly slower typing to mimic human
-                    searchInputFound = true;
-                    break;
-                    }
-                } catch (err) {
-                    console.log(`Selector ${selector} not found, trying next...`);
-                }
+                  try {
+                      const searchInput = await page.waitForSelector(selector, { visible: true, timeout: 5000 });
+                      if (searchInput) {
+                        console.log(`Search input found with selector: ${selector}`);
+                        await page.waitForSelector(selector, { visible: true, timeout: 5000 });
+                        console.log(`Selector ready`);
+                        await page.click(selector);
+                        console.log(`Clicked search input`);
+                        await page.type(selector, query, { delay: 50 }); // Slightly slower typing to mimic human
+                        console.log(`Typed query into search input`);
+                        searchInputFound = true;
+                        break;
+                      }
+                  } catch (err) {
+                      console.log(`Selector ${selector} not found, trying next...`);
+                  }
                 }
                 
                 if (!searchInputFound) {
@@ -376,7 +384,7 @@ app.post('/google-search', async (req, res) => {
                 
                 for (const selector of resultSelectors) {
                 try {
-                    await page.waitForSelector(selector, { timeout: 10000 });
+                    await page.waitForSelector(selector, { timeout: 20000 });
                     console.log(`Search results found with selector: ${selector}`);
                     resultsFound = true;
                     break;
@@ -610,21 +618,26 @@ app.post('/google-search', async (req, res) => {
             result.url = page.url();
             
             // Extract page text content
-            result.content = await page.evaluate(() => {
-                // Remove script and style elements
-                const scripts = document.querySelectorAll('script, style');
-                scripts.forEach(s => s.remove());
-                
-                // Get body text
-                return document.body.innerText;
-            });
+            // Get the HTML content from the page
+            const html = await page.content();
+            // Create a JSDOM instance using the current page URL for relative paths
+            const dom = new JSDOM(html, { url: page.url() });
+
+            // Parse the document with Readability
+            const article = new Readability(dom.window.document).parse();
+            // Get full content and truncate if needed
+            const maxLength = 25000; // Maximum characters to return
+            const fullContent = article ? article.textContent : '';
+            result.content = fullContent.length > maxLength ? 
+              fullContent.substring(0, maxLength) + '...' : 
+              fullContent;
             
             // Add DOM elements
             result.elements = await extractDOM(page, {
                 maxDepth: 3,
                 includeText: true,
                 textMinLength: 10,
-                maxElements: 200
+                maxElements: 100
             });
             } catch (error) {
                 console.error(`Get page error: ${error.message}`);
@@ -657,6 +670,8 @@ app.post('/google-search', async (req, res) => {
             screenshot = await page.screenshot({ encoding: 'base64' });
         }
         res.status(500).json({ error: error.message, screenshot: screenshot });
+    } finally {
+      checkMemory();
     }
 });
 
