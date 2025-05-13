@@ -2,7 +2,7 @@ const pidusage = require('pidusage');
 
 function checkMemory() {
     // Define a threshold in bytes (e.g., 500 MB)
-    const THRESHOLD = 300 * 1024 * 1024; 
+    const THRESHOLD = 100 * 1024 * 1024; 
     
     pidusage(process.pid, (err, stats) => {
     if (err) {

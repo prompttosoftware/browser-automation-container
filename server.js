@@ -7,7 +7,7 @@ const { extractDOM } = require('./extractDOM.js');
 const { Readability } = require('@mozilla/readability');
 const jsdom = require('jsdom');
 const { JSDOM } = jsdom;
-const { checkMemory } = require('./memoryMonitor.js');
+const ContainerTimer = require('./ContainerTimer.js');
 
 // Initialize Express app
 const app = express();
@@ -20,6 +20,12 @@ app.use(bodyParser.json({ limit: '50mb' }));
 // Store browser instance and active pages
 let browser;
 const activePages = new Map(); // Map to store active page sessions
+
+const timer = new ContainerTimer({
+  startTimeFile: '/data/.container_start.txt',
+  thresholdMinutes: 30,
+  killDelayMs: 60_000,   // wait 1m after threshold
+});
 
 puppeteer.use(StealthPlugin());
 
@@ -263,7 +269,7 @@ app.post('/actions', async (req, res) => {
     console.error('Execution error:', error);
     res.status(500).json({ error: error.message });
   } finally {
-    checkMemory();
+    timer.restartTimer();
   }
 });
 
@@ -658,7 +664,7 @@ app.post('/google-search', async (req, res) => {
         // take a screenshot
         let screenshot = await page.screenshot({ encoding: 'base64' });
         result.screenshot = `data:image/png;base64,${screenshot}`;
-    }
+      }
       
       res.status(200).json(result);
       
@@ -671,7 +677,7 @@ app.post('/google-search', async (req, res) => {
         }
         res.status(500).json({ error: error.message, screenshot: screenshot });
     } finally {
-      checkMemory();
+      timer.restartTimer();
     }
 });
 
@@ -774,4 +780,5 @@ process.on('SIGTERM', async () => {
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  timer.setStartTimeToNow();
 });
