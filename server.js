@@ -4,6 +4,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { extractDOM } = require('./extractDOM.js');
+const { waitForNetworkIdle } = require('./waitForNetworkIdle.js');
 const { Readability } = require('@mozilla/readability');
 const jsdom = require('jsdom');
 const { JSDOM } = jsdom;
@@ -95,22 +96,29 @@ app.post('/actions', async (req, res) => {
       try {
         switch (type.toLowerCase()) {
             case 'click-coordinates':
-                const { x, y } = action;
-                if (typeof x !== 'number' || typeof y !== 'number') {
-                  results.push({
-                    success: false,
-                    type,
-                    error: 'Both x and y coordinates are required for click-coordinates action'
-                  });
-                  continue;
-                }
-                await page.mouse.click(x, y);
+              const { x, y } = action;
+              if (typeof x !== 'number' || typeof y !== 'number') {
                 results.push({
-                  success: true,
+                  success: false,
                   type,
-                  x,
-                  y
+                  error: 'Both x and y coordinates are required for click-coordinates action'
                 });
+                continue;
+              }
+              await page.mouse.click(x, y);
+              // now wait for “settle”
+              try {
+                await waitForNetworkIdle(page, /* idleTime */ 500, /* timeout */ 10000);
+              } catch (err) {
+                // either timed out or something went wrong—optionally log it
+                console.warn('Network-idle wait failed:', err.message);
+              }
+              results.push({
+                success: true,
+                type,
+                x,
+                y
+              });
             break;
 
           case 'navigate':
@@ -136,11 +144,20 @@ app.post('/actions', async (req, res) => {
                 cleanClickSelector = JSON.parse(cleanClickSelector);
             } catch (err) {
                 // If parsing fails, log the error and fallback to the original string
-                console.error('Selector parsing failed:', err);
+                // console.error('Selector parsing failed:', err);
             }
             console.log('cleanSelector', cleanClickSelector);
             await page.waitForSelector(cleanClickSelector, { timeout: 5000 });
+            console.log('selector found...');
             await page.click(cleanClickSelector);
+            console.log('clicked...');
+            // now wait for “settle”
+            try {
+              await waitForNetworkIdle(page, /* idleTime */ 500, /* timeout */ 10000);
+            } catch (err) {
+              // either timed out or something went wrong—optionally log it
+              console.warn('Network-idle wait failed:', err.message);
+            }
             results.push({ success: true, type, selector: cleanClickSelector });
             break;
             
@@ -152,7 +169,7 @@ app.post('/actions', async (req, res) => {
                 cleanTypeSelector = JSON.parse(cleanTypeSelector);
             } catch (err) {
                 // If parsing fails, log the error and fallback to the original string
-                console.error('Selector parsing failed:', err);
+                // console.error('Selector parsing failed:', err);
             }
             await page.waitForSelector(cleanTypeSelector, { timeout: 5000 });
             await page.type(cleanTypeSelector, value);
@@ -168,6 +185,13 @@ app.post('/actions', async (req, res) => {
           case 'press':
             const { key } = action;
             await page.keyboard.press(key);
+            // now wait for “settle”
+            try {
+              await waitForNetworkIdle(page, /* idleTime */ 500, /* timeout */ 10000);
+            } catch (err) {
+              // either timed out or something went wrong—optionally log it
+              console.warn('Network-idle wait failed:', err.message);
+            }
             results.push({ success: true, type, key });
             break;
             
@@ -179,7 +203,7 @@ app.post('/actions', async (req, res) => {
                 cleanSelectSelector = JSON.parse(cleanSelectSelector);
             } catch (err) {
                 // If parsing fails, log the error and fallback to the original string
-                console.error('Selector parsing failed:', err);
+                // console.error('Selector parsing failed:', err);
             }
             await page.waitForSelector(cleanSelectSelector, { timeout: 5000 });
             await page.select(cleanSelectSelector, selectValue);
@@ -201,7 +225,7 @@ app.post('/actions', async (req, res) => {
                     cleanScreenshotSelector = JSON.parse(cleanScreenshotSelector);
                 } catch (err) {
                     // If parsing fails, log the error and fallback to the original string
-                    console.error('Selector parsing failed:', err);
+                    // console.error('Selector parsing failed:', err);
                 }
               await page.waitForSelector(cleanScreenshotSelector, { timeout: 5000 });
               const element = await page.$(cleanScreenshotSelector);
@@ -245,9 +269,29 @@ app.post('/actions', async (req, res) => {
     // If page wasn't closed, extract DOM and add to response
     if (activePages.has(sessionId)) {
       const page = activePages.get(sessionId);
-      response.url = page.url();
-      response.title = await page.title();
-      response.elements = await extractDOM(page, elementOptions || {});
+      const url = page.url();
+      response.url = url;
+      // only call title() if page is still open
+      if (!page.isClosed()) {
+        try {
+          response.title = await page.title();
+        } catch (err) {
+          // context was destroyed or navigation in-flight
+          response.title = null;
+        }
+      }
+      if (url.endsWith('.pdf') || url.startsWith('data:')) {
+        response.elements = [];
+      } else {
+        // safe to scrape
+        await page.waitForSelector('body', { timeout: 5000 });
+        response.elements = await extractDOM(page, elementOptions || {
+          maxDepth: 3,
+          includeText: true,
+          textMinLength: 10,
+          maxElements: 100
+        });
+      }
     }
     
     // Add screenshot to response if taken
@@ -255,11 +299,11 @@ app.post('/actions', async (req, res) => {
         response.screenshot = `data:image/png;base64,${screenshot}`;
     }
     else {
-        if (results.some(r => r.success === false)) {
-            // take a screenshot
-            let screenshot = await page.screenshot({ encoding: 'base64' });
-            response.screenshot = `data:image/png;base64,${screenshot}`;
-        }
+        // if (results.some(r => r.success === false)) {
+        //     // take a screenshot
+        //     let screenshot = await page.screenshot({ encoding: 'base64' });
+        //     response.screenshot = `data:image/png;base64,${screenshot}`;
+        // }
     }
     
     // Return the response
@@ -660,11 +704,11 @@ app.post('/google-search', async (req, res) => {
           });
       }
 
-      if (result.error) {
-        // take a screenshot
-        let screenshot = await page.screenshot({ encoding: 'base64' });
-        result.screenshot = `data:image/png;base64,${screenshot}`;
-      }
+      // if (result.error) {
+      //   // take a screenshot
+      //   let screenshot = await page.screenshot({ encoding: 'base64' });
+      //   result.screenshot = `data:image/png;base64,${screenshot}`;
+      // }
       
       res.status(200).json(result);
       
