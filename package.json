@@ -9,15 +9,18 @@
     },
     "dependencies": {
         "@mozilla/readability": "^0.6.0",
-        "express": "^4.21.2",
-        "puppeteer": "^24.4.0",
         "body-parser": "^1.20.3",
+        "browser-automation-container": "file:",
+        "chrome-launcher": "^1.2.0",
         "cors": "^2.8.5",
+        "express": "^4.21.2",
+        "jsdom": "^26.0.0",
+        "lighthouse": "^12.7.1",
+        "pidusage": "^4.0.0",
+        "puppeteer": "^24.4.0",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-stealth": "^2.11.2",
-        "vitest": "^3.0.9",
-        "jsdom": "^26.0.0",
-        "pidusage": "^4.0.0"
+        "vitest": "^3.0.9"
     },
     "engines": {
         "node": ">=18.0.0"

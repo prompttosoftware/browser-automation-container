@@ -42,10 +42,144 @@ async function initBrowser() {
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--disable-gpu'
-    ]
+      '--disable-gpu',
+
+      // Enable developer tools features
+      '--remote-debugging-port=9222', // Enable DevTools protocol
+      '--enable-logging',
+      '--log-level=0',
+      '--disable-web-security', // For cross-origin requests if needed
+      '--allow-running-insecure-content',
+      
+      // Performance and memory monitoring
+      '--enable-precise-memory-info', // Enable memory API
+      '--enable-memory-info',
+      '--js-flags=--expose-gc', // Enable garbage collection API
+      
+      // Network monitoring
+      '--enable-features=NetworkService',
+      '--enable-network-service-logging',
+      
+      // Better debugging
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      
+      // Existing performance args
+      '--disable-features=VizDisplayCompositor',
+      '--disable-ipc-flooding-protection'
+    ],
+    // Enable additional permissions
+    ignoreDefaultArgs: ['--disable-extensions'],
   });
   console.log('Browser initialized');
+}
+
+// Enhanced page creation with developer tools setup
+async function createPage() {
+  const page = await browser.newPage();
+  
+  // Set viewport (your existing code)
+  await page.setViewport({ width: 1280, height: 800 });
+  
+  // Enable developer tools features
+  await page.setCacheEnabled(false); // Disable cache for fresh network requests
+  
+  // Enable JavaScript execution context
+  await page.evaluateOnNewDocument(() => {
+    // Expose useful debugging functions
+    window.puppeteerDebug = {
+      getElementInfo: (selector) => {
+        const element = document.querySelector(selector);
+        if (!element) return null;
+        
+        const computedStyle = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        
+        return {
+          tagName: element.tagName,
+          id: element.id,
+          className: element.className,
+          textContent: element.textContent?.substring(0, 500),
+          computedStyle: {
+            display: computedStyle.display,
+            position: computedStyle.position,
+            width: computedStyle.width,
+            height: computedStyle.height
+          },
+          boundingRect: rect,
+          isVisible: element.offsetWidth > 0 && element.offsetHeight > 0
+        };
+      }
+    };
+  });
+  
+  // Set up console monitoring
+  const consoleLogs = [];
+  page.on('console', msg => {
+    consoleLogs.push({
+      type: msg.type(),
+      text: msg.text(),
+      timestamp: new Date().toISOString(),
+      location: msg.location()
+    });
+  });
+  
+  // Set up network monitoring
+  const networkRequests = [];
+  
+  page.on('request', request => {
+    networkRequests.push({
+      id: request.url() + '-' + Date.now(),
+      url: request.url(),
+      method: request.method(),
+      headers: request.headers(),
+      postData: request.postData(),
+      timestamp: new Date().toISOString(),
+      resourceType: request.resourceType()
+    });
+  });
+  
+  page.on('response', response => {
+    const request = networkRequests.find(req => 
+      req.url === response.url() && !req.status
+    );
+    if (request) {
+      request.status = response.status();
+      request.statusText = response.statusText();
+      request.responseHeaders = response.headers();
+      request.fromCache = response.fromCache();
+      request.fromServiceWorker = response.fromServiceWorker();
+    }
+  });
+  
+  page.on('requestfailed', request => {
+    const reqData = networkRequests.find(req => 
+      req.url === request.url() && !req.status
+    );
+    if (reqData) {
+      reqData.failed = true;
+      reqData.errorText = request.failure().errorText;
+    }
+  });
+  
+  // Store monitoring data on page object for easy access
+  page.puppeteerData = {
+    consoleLogs,
+    networkRequests,
+    createdAt: new Date().toISOString()
+  };
+  
+  // Set up error handling
+  page.on('error', err => {
+    console.error('Page error:', err);
+  });
+  
+  page.on('pageerror', err => {
+    console.error('Page JavaScript error:', err);
+  });
+  
+  return page;
 }
 
 // Initialize browser when server starts
@@ -78,12 +212,9 @@ app.post('/actions', async (req, res) => {
         sessionId = [...activePages.keys()][pages.length - 1];
     } else {
         console.log("Creating new session...");
-        page = await browser.newPage();
+        page = await createPage(); // Use enhanced page creation
         sessionId = sessionId || Date.now().toString();
         activePages.set(sessionId, page);
-        
-        // Set viewport
-        await page.setViewport({ width: 1280, height: 800 });
     }
     
     // Execute each action in sequence
@@ -241,6 +372,272 @@ app.post('/actions', async (req, res) => {
             await page.close();
             activePages.delete(sessionId);
             results.push({ success: true, type });
+            break;
+
+          case 'execute-js':
+            const { code } = action;
+            const jsResult = await page.evaluate(code);
+            results.push({ 
+              success: true, 
+              type, 
+              result: jsResult 
+            });
+            break;
+
+          case 'get-console-logs':
+            // Enable console monitoring (add this to page creation)
+            const consoleLogs = [];
+            page.on('console', msg => {
+              consoleLogs.push({
+                type: msg.type(),
+                text: msg.text(),
+                timestamp: new Date().toISOString()
+              });
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              logs: consoleLogs 
+            });
+            break;
+
+          case 'get-network-requests':
+            const networkRequests = [];
+            page.on('request', request => {
+              networkRequests.push({
+                url: request.url(),
+                method: request.method(),
+                headers: request.headers(),
+                timestamp: new Date().toISOString()
+              });
+            });
+            page.on('response', response => {
+              const request = networkRequests.find(req => req.url === response.url());
+              if (request) {
+                request.status = response.status();
+                request.responseHeaders = response.headers();
+                request.size = response.headers()['content-length'];
+              }
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              requests: networkRequests 
+            });
+            break;
+
+          case 'get-performance-metrics':
+            const performanceMetrics = await page.evaluate(() => {
+              const navigation = performance.getEntriesByType('navigation')[0];
+              const paint = performance.getEntriesByType('paint');
+              
+              return {
+                domContentLoaded: navigation.domContentLoadedEventEnd - navigation.domContentLoadedEventStart,
+                loadComplete: navigation.loadEventEnd - navigation.loadEventStart,
+                firstPaint: paint.find(p => p.name === 'first-paint')?.startTime,
+                firstContentfulPaint: paint.find(p => p.name === 'first-contentful-paint')?.startTime,
+                memoryUsage: performance.memory ? {
+                  usedJSHeapSize: performance.memory.usedJSHeapSize,
+                  totalJSHeapSize: performance.memory.totalJSHeapSize,
+                  jsHeapSizeLimit: performance.memory.jsHeapSizeLimit
+                } : null
+              };
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              metrics: performanceMetrics 
+            });
+            break;
+
+          case 'get-element-info':
+            const { selector: infoSelector } = action;
+            let cleanInfoSelector = infoSelector;
+            try {
+              cleanInfoSelector = JSON.parse(cleanInfoSelector);
+            } catch (err) {
+              console.error('Selector parsing failed:', err);
+            }
+            
+            const elementInfo = await page.evaluate((sel) => {
+              const element = document.querySelector(sel);
+              if (!element) return null;
+              
+              const computedStyle = window.getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              
+              return {
+                tagName: element.tagName,
+                id: element.id,
+                className: element.className,
+                textContent: element.textContent?.substring(0, 500),
+                attributes: Object.fromEntries(
+                  Array.from(element.attributes).map(attr => [attr.name, attr.value])
+                ),
+                computedStyle: {
+                  display: computedStyle.display,
+                  position: computedStyle.position,
+                  width: computedStyle.width,
+                  height: computedStyle.height,
+                  color: computedStyle.color,
+                  backgroundColor: computedStyle.backgroundColor,
+                  fontSize: computedStyle.fontSize,
+                  fontFamily: computedStyle.fontFamily
+                },
+                boundingRect: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height
+                },
+                isVisible: element.offsetWidth > 0 && element.offsetHeight > 0
+              };
+            }, cleanInfoSelector);
+            
+            results.push({ 
+              success: true, 
+              type, 
+              elementInfo 
+            });
+            break;
+
+          case 'get-local-storage':
+            const localStorage = await page.evaluate(() => {
+              const storage = {};
+              for (let i = 0; i < window.localStorage.length; i++) {
+                const key = window.localStorage.key(i);
+                storage[key] = window.localStorage.getItem(key);
+              }
+              return storage;
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              localStorage 
+            });
+            break;
+
+          case 'set-local-storage':
+            const { key: storageKey, value: storageValue } = action;
+            await page.evaluate((key, value) => {
+              window.localStorage.setItem(key, value);
+            }, storageKey, storageValue);
+            results.push({ 
+              success: true, 
+              type, 
+              key: storageKey 
+            });
+            break;
+
+          case 'get-cookies':
+            const cookies = await page.cookies();
+            results.push({ 
+              success: true, 
+              type, 
+              cookies 
+            });
+            break;
+
+          case 'lighthouse-audit':
+            // Requires lighthouse package: npm install lighthouse
+            const lighthouse = require('lighthouse');
+            const chromeLauncher = require('chrome-launcher');
+            
+            const chrome = await chromeLauncher.launch({chromeFlags: ['--headless']});
+            const options = {logLevel: 'info', output: 'json', port: chrome.port};
+            const runnerResult = await lighthouse(page.url(), options);
+            await chrome.kill();
+            
+            results.push({ 
+              success: true, 
+              type, 
+              audit: {
+                performance: runnerResult.lhr.categories.performance.score * 100,
+                accessibility: runnerResult.lhr.categories.accessibility.score * 100,
+                bestPractices: runnerResult.lhr.categories['best-practices'].score * 100,
+                seo: runnerResult.lhr.categories.seo.score * 100
+              }
+            });
+            break;
+
+          case 'get-page-source':
+            const pageSource = await page.content();
+            results.push({ 
+              success: true, 
+              type, 
+              source: pageSource 
+            });
+            break;
+
+          case 'get-all-links':
+            const links = await page.evaluate(() => {
+              return Array.from(document.querySelectorAll('a[href]')).map(link => ({
+                href: link.href,
+                text: link.textContent.trim(),
+                title: link.title,
+                target: link.target
+              }));
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              links 
+            });
+            break;
+
+          case 'get-all-images':
+            const images = await page.evaluate(() => {
+              return Array.from(document.querySelectorAll('img')).map(img => ({
+                src: img.src,
+                alt: img.alt,
+                width: img.width,
+                height: img.height,
+                naturalWidth: img.naturalWidth,
+                naturalHeight: img.naturalHeight
+              }));
+            });
+            results.push({ 
+              success: true, 
+              type, 
+              images 
+            });
+            break;
+
+          case 'check-accessibility':
+            // Basic accessibility checks
+            const a11yIssues = await page.evaluate(() => {
+              const issues = [];
+              
+              // Check for missing alt text
+              const imagesWithoutAlt = document.querySelectorAll('img:not([alt])');
+              if (imagesWithoutAlt.length > 0) {
+                issues.push(`${imagesWithoutAlt.length} images missing alt text`);
+              }
+              
+              // Check for missing form labels
+              const inputsWithoutLabels = document.querySelectorAll('input:not([aria-label]):not([aria-labelledby])');
+              const unlabeledInputs = Array.from(inputsWithoutLabels).filter(input => {
+                const label = document.querySelector(`label[for="${input.id}"]`);
+                return !label && input.type !== 'submit' && input.type !== 'button';
+              });
+              if (unlabeledInputs.length > 0) {
+                issues.push(`${unlabeledInputs.length} form inputs missing labels`);
+              }
+              
+              // Check for missing heading structure
+              const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+              if (headings.length === 0) {
+                issues.push('No heading elements found');
+              }
+              
+              return issues;
+            });
+            
+            results.push({ 
+              success: true, 
+              type, 
+              issues: a11yIssues 
+            });
             break;
             
           default:
@@ -803,6 +1200,27 @@ app.get('/health', (req, res) => {
     activeSessions: activePages.size
   });
 });
+
+// Clean up resources periodically
+setInterval(async () => {
+  if (activePages.size > 10) { // Clean up if too many pages
+    console.log('Cleaning up old page sessions...');
+    const sortedPages = Array.from(activePages.entries())
+      .sort((a, b) => new Date(b[1].puppeteerData.createdAt) - new Date(a[1].puppeteerData.createdAt));
+    
+    // Keep only the 5 most recent pages
+    const pagesToClose = sortedPages.slice(5);
+    for (const [sessionId, page] of pagesToClose) {
+      try {
+        await page.close();
+        activePages.delete(sessionId);
+        console.log(`Closed session: ${sessionId}`);
+      } catch (err) {
+        console.error('Error closing page:', err);
+      }
+    }
+  }
+}, 5 * 60 * 1000); // Every 5 minutes
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
