@@ -4,6 +4,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { extractDOM } = require('./extractDOM.js');
+const { isLocalUrl } = require('./isLocalHostUrl.js');
 const { waitForNetworkIdle } = require('./waitForNetworkIdle.js');
 const { Readability } = require('@mozilla/readability');
 const jsdom = require('jsdom');
@@ -190,7 +191,7 @@ initBrowser().catch(err => {
 
 // Unified endpoint to perform a sequence of actions
 app.post('/actions', async (req, res) => {
-  let { sessionId, actions, elementOptions } = req.body;
+  let { sessionId, actions, elementOptions, localHostnames = [] } = req.body;
   
   if (!actions || !Array.isArray(actions)) {
     return res.status(400).json({ error: 'Array of actions is required' });
@@ -456,7 +457,7 @@ app.post('/actions', async (req, res) => {
             try {
               cleanInfoSelector = JSON.parse(cleanInfoSelector);
             } catch (err) {
-              console.error('Selector parsing failed:', err);
+              // console.error('Selector parsing failed:', err);
             }
             
             const elementInfo = await page.evaluate((sel) => {
@@ -682,12 +683,24 @@ app.post('/actions', async (req, res) => {
       } else {
         // safe to scrape
         await page.waitForSelector('body', { timeout: 5000 });
-        response.elements = await extractDOM(page, elementOptions || {
-          maxDepth: 3,
-          includeText: true,
-          textMinLength: 10,
-          maxElements: 100
-        });
+        const pageUrl = page.url();
+        const isLocal = isLocalUrl(pageUrl, localHostnames);
+
+        const options = isLocal
+          ? {
+              maxDepth: 20,
+              includeText: true,
+              textMinLength: 1,
+              maxElements: 300
+            }
+          : (elementOptions || {
+              maxDepth: 3,
+              includeText: true,
+              textMinLength: 10,
+              maxElements: 100
+            });
+
+        response.elements = await extractDOM(page, options);
       }
     }
     
